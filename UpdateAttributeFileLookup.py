@@ -15,6 +15,7 @@
 
 import os
 import re
+import time
 from nifiapi.properties import PropertyDescriptor
 from nifiapi.properties import StandardValidators
 from nifiapi.properties import ExpressionLanguageScope
@@ -49,30 +50,35 @@ class UpdateAttributeFileLookup(FlowFileTransform):
 
     def __init__(self, jvm, **kwargs):
         super().__init__()
+        self.extracted_date = None
+        self.last_extract_time = time.time_ns()
 
     def transform(self, context, flow_file):
-        dir_path = context.getProperty(self.DIRECTORY.name).evaluateAttributeExpressions(flow_file).getValue()
-        files = []
-        try:
-            for file_path in os.listdir(dir_path):
-                if os.path.isfile(os.path.join(dir_path, file_path)):
-                    files.append(file_path)
-        except FileNotFoundError:
-            self.logger.info(f"The directory {dir_path} does not exist")
-        except PermissionError:
-            self.logger.info(f"Permission denied to access files in {dir_path}")
-        except OSError as e:
-            self.logger.info(f"An unspecified OS error occurred: {e}")
+        # Check if time to update extracted date
+        curr_time = time.time_ns()
+        if not self.extracted_date or ((int(self.last_extract_time) + 10000000000) < curr_time):
+            self.last_extract_time = curr_time
+            dir_path = context.getProperty(self.DIRECTORY.name).evaluateAttributeExpressions(flow_file).getValue()
+            files = []
+            try:
+                for file_path in os.listdir(dir_path):
+                    if os.path.isfile(os.path.join(dir_path, file_path)):
+                        files.append(file_path)
+            except FileNotFoundError:
+                self.logger.info(f"The directory {dir_path} does not exist")
+            except PermissionError:
+                self.logger.info(f"Permission denied to access files in {dir_path}")
+            except OSError as e:
+                self.logger.info(f"An unspecified OS error occurred: {e}")
 
-        if len(files) > 0:
-            filename = files[-1]
-            match = re.match(r'.*-(?P<date_extract>\d{8})-.*', filename)
-            if match:
-                date_val = match.group('date_extract')
-                attributes = {"extracted-date": date_val}
-                return FlowFileTransformResult(relationship="success", attributes=attributes)
-            else:
-                return FlowFileTransformResult(relationship="failure")
+            if len(files) > 0:
+                filename = files[-1]
+                match = re.match(r'.*-(?P<date_extract>\d{8})-.*', filename)
+                if match:
+                    self.extracted_date = match.group('date_extract')
+
+        if self.extracted_date:
+            return FlowFileTransformResult(relationship="success", attributes={"extracted-date": self.extracted_date})
         else:
             return FlowFileTransformResult(relationship="failure")
 
